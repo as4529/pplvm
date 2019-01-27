@@ -40,92 +40,80 @@ cdef dlse(double[::1] a,
     for k in range(K):
         out[k] = exp(a[k] - lse)
 
+cpdef forward_pass(double[:,::1] log_pi0,
+                   double[:,:,:,::1] log_As,
+                   double[:,:,::1] log_likes,
+                   double[:,:,::1] alphas):
 
-# def dLSE_da(a, B):
-#     return np.exp(a + B.T - logsumexp(a + B.T, axis=1, keepdims=True))
-#
-# def vjp_LSE_B(a, B, v):
-#     return v * dLSE_da(a, B).T
-
-
-cpdef forward_pass(double[::1] log_pi0,
-                   double[:,:,::1] log_As,
-                   double[:,::1] log_likes,
-                   double[:,::1] alphas):
-
-    cdef int T, K, t, k
-    T = log_likes.shape[0]
-    K = log_likes.shape[1]
-    assert log_As.shape[0] == T-1
-    assert log_As.shape[1] == K
+    cdef int B, T, K, t, k
+    B = log_likes.shape[0]
+    T = log_likes.shape[1]
+    K = log_likes.shape[2]
+    assert log_As.shape[1] == T-1
     assert log_As.shape[2] == K
-    assert alphas.shape[0] == T
-    assert alphas.shape[1] == K
+    assert log_As.shape[3] == K
+    assert alphas.shape[1] == T
+    assert alphas.shape[2] == K
+    cdef double[:,::1] tmp = np.zeros((B, K))
+    cdef double[::1] out = np.zeros(B)
 
-    cdef double[::1] tmp = np.zeros(K)
+    for b in range(B):
 
-    for k in range(K):
-        alphas[0, k] = log_pi0[k] + log_likes[0, k]
-
-    for t in range(T - 1):
         for k in range(K):
-            for j in range(K):
-                tmp[j] = alphas[t, j] + log_As[t, j, k]
-            alphas[t+1, k] = logsumexp(tmp) + log_likes[t+1, k]
+            alphas[b, 0, k] = log_pi0[b, k] + log_likes[b, 0, k]
 
-    return logsumexp(alphas[T-1])
+        for t in range(T - 1):
+            for k in range(K):
+                for j in range(K):
+                    tmp[b, j] = alphas[b, t, j] + log_As[b, t, j, k]
+                alphas[b, t+1, k] = logsumexp(tmp[b,:]) + log_likes[b, t+1, k]
+        out[b] = logsumexp(alphas[b, T-1])
+
+    return out
 
 
-cpdef backward_pass(double[:,:,::1] log_As,
-                    double[:,::1] alphas,
-                    double[::1] d_log_pi0,
-                    double[:,:,::1] d_log_As,
-                    double[:,::1] d_log_likes):
+cpdef backward_pass(double[:, :,:,::1] log_As,
+                    double[:, :,::1] alphas,
+                    double[:, ::1] d_log_pi0,
+                    double[:, :,:,::1] d_log_As,
+                    double[:, :,::1] d_log_likes):
 
-    cdef int T, K, t, k, j
+    cdef int B, T, K, t, k, j
 
-    T = alphas.shape[0]
-    K = alphas.shape[1]
-    assert log_As.shape[0] == d_log_As.shape[0] == T-1
-    assert log_As.shape[1] == d_log_As.shape[1] == K
+    B = alphas.shape[0]
+    T = alphas.shape[1]
+    K = alphas.shape[2]
+    assert log_As.shape[1] == d_log_As.shape[1] == T-1
     assert log_As.shape[2] == d_log_As.shape[2] == K
-    assert d_log_pi0.shape[0] == K
-    assert d_log_likes.shape[0] == T
-    assert d_log_likes.shape[1] == K
+    assert log_As.shape[3] == d_log_As.shape[3] == K
+    assert d_log_pi0.shape[1] == K
+    assert d_log_likes.shape[1] == T
+    assert d_log_likes.shape[2] == K
 
     # Initialize temp storage for gradients
-    cdef double[::1] tmp1 = np.zeros((K,))
-    cdef double[:, ::1] tmp2 = np.zeros((K, K))
-
-    dlse(alphas[T-1], d_log_likes[T-1])
-    for t in range(T-1, 0, -1):
-        # tmp2 = dLSE_da(alphas[t-1], log_As[t-1])
-        #      = np.exp(alphas[t-1] + log_As[t-1].T - logsumexp(alphas[t-1] + log_As[t-1].T, axis=1))
-        #      = [dlse(alphas[t-1] + log_As[t-1, :, k]) for k in range(K)]
-        for k in range(K):
-            for j in range(K):
-                tmp1[j] = alphas[t-1, j] + log_As[t-1, j, k]
-            dlse(tmp1, tmp2[k])
+    cdef double[:,::1] tmp1 = np.zeros((B, K))
+    cdef double[:,:, ::1] tmp2 = np.zeros((B, K, K))
 
 
-        # d_log_As[t-1] = vjp_LSE_B(alphas[t-1], log_As[t-1], d_log_likes[t])
-        #               = d_log_likes[t] * dLSE_da(alphas[t-1], log_As[t-1]).T
-        #               = d_log_likes[t] * tmp2.T
-        #
-        # d_log_As[t-1, j, k] = d_log_likes[t, k] * tmp2.T[j, k]
-        #                     = d_log_likes[t, k] * tmp2[k, j]
-        for j in range(K):
+    for b in range(B):
+
+        dlse(alphas[b,T-1], d_log_likes[b,T-1])
+        for t in range(T-1, 0, -1):
             for k in range(K):
-                d_log_As[t-1, j, k] = d_log_likes[t, k] * tmp2[k, j]
+                for j in range(K):
+                    tmp1[b,j] = alphas[b,t-1, j] + log_As[b,t-1, j, k]
+                dlse(tmp1[b], tmp2[b,k])
 
-        # d_log_likes[t-1] = d_log_likes[t].dot(dLSE_da(alphas[t-1], log_As[t-1]))
-        #                  = d_log_likes[t].dot(tmp2)
-        for k in range(K):
-            d_log_likes[t-1, k] = 0
             for j in range(K):
-                d_log_likes[t-1, k] += d_log_likes[t, j] * tmp2[j, k]
+                for k in range(K):
+                    d_log_As[b,t-1, j, k] = d_log_likes[b,t, k] * tmp2[b,k, j]
 
-    # d_log_pi0 = d_log_likes[0]
-    for k in range(K):
-        d_log_pi0[k] = d_log_likes[0, k]
+            for k in range(K):
+                d_log_likes[b,t-1, k] = 0
+                for j in range(K):
+                    d_log_likes[b,t-1, k] += d_log_likes[b,t, j] * tmp2[b,j, k]
+
+        for k in range(K):
+            d_log_pi0[b,k] = d_log_likes[b,0, k]
+
 

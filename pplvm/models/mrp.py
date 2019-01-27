@@ -1,5 +1,7 @@
 import torch
+import torch.nn as nn
 from torch.distributions import Gamma, Normal
+from pplvm.message_passing.normalizer import hmmnorm_cython
 
 class MRP(nn.Module):
     """
@@ -44,20 +46,23 @@ class MRP(nn.Module):
 
         """
 
+        B, N, D = Y.shape
+
         # calculating likelihoods per discrete state for Y and intervals
         h, y_ll, y_loss = self.obs_model(Y)
         dT_ll = self.dT_mixture_prob(dT)
         ll = y_ll + dT_ll
+        print(ll.shape)
 
         # normalizing transition and initial probabilities
-        A_expand = torch.nn.LogSoftmax(dim=1)(self.A).expand(len(dT) - 1,
+        A_expand = torch.nn.LogSoftmax(dim=1)(self.A).expand(B,
+                                                             N - 1,
                                                              self.K, self.K)
-        pi0_norm = torch.nn.LogSoftmax(dim=0)(self.obs_model.pi)
+        pi0_norm = torch.nn.LogSoftmax(dim=0)(self.obs_model.pi).expand(B, self.K)
 
-        # computing hmm normalizer
-        loss = - 1. * hmmnorm_cython(pi0_norm,
+        loss = - 1. * hmmnorm_cython(pi0_norm.contiguous(),
                                      A_expand.contiguous(),
-                                     ll.contiguous()) + y_loss
+                                     ll.contiguous()) #+ y_loss
 
         return h, loss
 
@@ -75,9 +80,7 @@ class MRP(nn.Module):
             p_g = Gamma(torch.exp(self.log_ab[k][0]), torch.exp(self.log_ab[k][1]))
             prob_g = p_g.log_prob(dT)
             prob.append(prob_g)
-        prob = torch.stack(prob).t()
-
-        return prob
+        return torch.stack(prob, dim=-1)
 
     def max_z(self,
               Y,

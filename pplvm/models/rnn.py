@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 
 class RNNInduce(torch.nn.Module):
     """

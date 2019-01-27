@@ -133,9 +133,7 @@ class MixturePrior(nn.Module):
             p = MultivariateNormal(self.prior_mus[k],
                                    scale_tril=self.prior_sigmas[k].tril())
             prob.append(p.log_prob(x))
-        prob = torch.stack(prob)
-
-        return prob.t()
+        return torch.stack(prob, dim=-1)
 
     def prior_prob(self, x):
         """
@@ -153,9 +151,7 @@ class MixturePrior(nn.Module):
             p = MultivariateNormal(self.prior_mus[k],
                                    scale_tril=self.prior_sigmas[k].tril())
             prob.append(p.log_prob(x) + self.pi_norm[k])
-        prob = torch.stack(prob).t()
-
-        return prob.logsumexp(dim=1).sum()
+        return torch.stack(prob, dim=-1)
 
     def max_z(self, x):
         """

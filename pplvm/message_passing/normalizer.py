@@ -22,11 +22,11 @@ class HMMNormalizerCython(Function):
         Returns:
 
         """
-        T, K = log_likes.shape
+        B, T, K = log_likes.shape
         log_pi0, log_As, log_likes = log_pi0.detach(),\
                                      log_As.detach(),\
                                      log_likes.detach()
-        alphas = np.zeros((T, K))
+        alphas = np.zeros((B, T, K))
         Z = forward_pass_cython(log_pi0.numpy(),
                                 log_As.numpy(),
                                 log_likes.numpy(),

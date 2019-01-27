@@ -5,7 +5,7 @@ from torch.distributions import MultivariateNormal, Normal, Gamma, kl_divergence
 
 from pplvm.message_passing.normalizer import hmmnorm_cython
 
-class GPM(object):
+class GPM(nn.Module):
     """
     Gaussian process modulated Markov renewal process
     """
@@ -34,7 +34,7 @@ class GPM(object):
             log_ab (torch.tensor): initial Gamma parameters (K by 2)
              
         """
-
+        super(GPM, self).__init__()
         self.K = K
         self.obs_model = obs_model
 
