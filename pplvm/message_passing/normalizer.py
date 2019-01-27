@@ -48,16 +48,19 @@ class HMMNormalizerCython(Function):
         """
         alphas, log_As = ctx.saved_tensors
         alphas, log_As = alphas.detach().numpy(), log_As.detach().numpy()
-        T, K = alphas.shape
+        B, T, K = alphas.shape
 
-        d_log_pi0 = np.zeros(K)
-        d_log_As = np.zeros((T - 1, K, K))
-        d_log_likes = np.zeros((T, K))
+        d_log_pi0 = np.zeros((B, K))
+        d_log_As = np.zeros((B, T - 1, K, K))
+        d_log_likes = np.zeros((B, T, K))
 
         backward_pass_cython(log_As, alphas, d_log_pi0, d_log_As, d_log_likes)
 
-        return torch.tensor(d_log_pi0 * grad_output, dtype=torch.float64), \
-               torch.tensor(d_log_As * grad_output, dtype=torch.float64), \
-               torch.tensor(d_log_likes * grad_output, dtype=torch.float64)
+        return torch.einsum('i,ij->ij',[grad_output,
+                                        torch.tensor(d_log_pi0).double()]), \
+               torch.einsum('i,ijkl->ijkl', [grad_output,
+                                             torch.tensor(d_log_As).double()]),\
+               torch.einsum('i,ijk->ijk', [grad_output,
+                                           torch.tensor(d_log_likes).double()])
 
 hmmnorm_cython = HMMNormalizerCython.apply

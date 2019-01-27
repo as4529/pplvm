@@ -95,25 +95,28 @@ class GPM(nn.Module):
         if qmu is not None and qs is not None:
             q_u = MultivariateNormal(qmu, torch.diag(qs.exp()))
         else:
-            mu, log_var = self.x_model(h, dT, induce_idx, switch)
-            q_u = MultivariateNormal(mu.squeeze(),
-                                     torch.diag(log_var.squeeze().exp()))
+            mu, log_var = self.x_model(h, dT, induce_idx)
+            covar = torch.diag_embed(log_var.exp().squeeze(), dim1=-2, dim2=-1)
+            q_u = MultivariateNormal(mu.squeeze(), covar)
         # sparse GP KL
-        u = q_u.rsample().squeeze()
-        p_u = MultivariateNormal(torch.zeros(u.shape[0], dtype=torch.float64),
+        u = q_u.rsample()
+        p_u = MultivariateNormal(torch.zeros_like(u, dtype=torch.float64),
                                  precision_matrix=K_uu_inv)
         kl = kl_divergence(q_u, p_u)
 
         # HMM loss
-        X = torch.mv(K_xu, torch.mv(K_uu_inv, u))
+        X = torch.matmul(K_xu.transpose(-2,-1), torch.matmul(K_uu_inv, u.unsqueeze(-1)))
         log_pi0, log_pi, log_ab = self.calc_params(X)
-        ll = self.log_like_dT(dT, log_ab) + y_ll
+        ll_dT = self.log_like_dT(dT, log_ab)
+        ll =  ll_dT + y_ll
 
-        loss_hmm = -1. * hmmnorm_cython(log_pi0, log_pi.contiguous(),  ll.contiguous()) +\
+        loss_hmm = -1. * hmmnorm_cython(log_pi0.contiguous(),
+                                        log_pi.contiguous(),
+                                        ll.contiguous()) +\
                     y_loss
         loss = loss_hmm + anneal * kl
 
-        return X, loss
+        return X, loss.mean()
 
     def calc_params(self, X):
         """
@@ -126,12 +129,11 @@ class GPM(nn.Module):
             N by K by 2 Gamma interval parameters
         """
 
-        log_pi0 = torch.nn.LogSoftmax(dim=0)(self.pi)
-
-        pi_trans = X[:-1] * self.W_pi
-        pi = pi_trans.t().unsqueeze(1) + self.bias_A
-        log_pi = torch.nn.LogSoftmax(dim=2)(pi)
-        log_ab = X * self.W_ab.unsqueeze(2) + self.bias_ab.unsqueeze(2)
+        log_pi0 = torch.nn.LogSoftmax(dim=0)(self.obs_model.pi).expand(X.shape[0], self.K)
+        pi_trans = torch.matmul(X[:,:-1], self.W_pi.t())
+        pi = pi_trans.unsqueeze(-2) + self.bias_A
+        log_pi = torch.nn.LogSoftmax(dim=-2)(pi)
+        log_ab = X.unsqueeze(-1) * self.W_ab + self.bias_ab
 
         return log_pi0, log_pi, log_ab
 
@@ -146,10 +148,10 @@ class GPM(nn.Module):
                 (n_induce, n_induce)
 
         """
-
-        dist = torch.pow(T_induce.unsqueeze(1) - T_induce, 2)
+        norm = T_induce.pow(2).sum(dim=-1, keepdim=True)
+        dist =  norm + norm.transpose(-2, -1) - 2 * T_induce.bmm(T_induce.transpose(-2,-1))
         K = self.var * torch.exp(- dist / (2 * self.ls ** 2))
-        K = K + torch.eye(K.shape[0]).double() * eps
+        K = K + torch.eye(K.shape[1]).double().repeat(len(T_induce), 1, 1)  * eps
         K_inv = K.inverse()
 
         return K_inv
@@ -165,7 +167,9 @@ class GPM(nn.Module):
 
         """
 
-        dist = torch.pow(T_induce - T.unsqueeze(1), 2)
+        norm = T_induce.pow(2).sum(dim=-1, keepdim=True) + \
+               T.unsqueeze(-1).pow(2).sum(dim=-1, keepdim=True).transpose(-2, -1)
+        dist = norm - 2 * T_induce.bmm(T.unsqueeze(-2))
         W = self.var * torch.exp(- dist / (2 * self.ls ** 2))
 
         return W
@@ -179,9 +183,8 @@ class GPM(nn.Module):
         Returns: inducing points (n_induce)
 
         """
-
-        induce_idx = list(np.arange(0, len(T) - 1, self.induce_rate).astype(int))
-        T_induce = T[induce_idx]
+        induce_idx = list(np.arange(0, T.shape[1] - 1, self.induce_rate).astype(int))
+        T_induce = T[:,induce_idx].unsqueeze(-1)
 
         return T_induce, induce_idx
 
@@ -198,12 +201,12 @@ class GPM(nn.Module):
 
         prob = []
         for k in range(self.K):
-            p_g = Gamma(torch.exp(log_ab[k][0]), torch.exp(log_ab[k][1]))
+            p_g = Gamma(torch.exp(log_ab[:,:,k,0]),
+                        torch.exp(log_ab[:,:,k,1]))
             prob_g = p_g.log_prob(dT)
             prob.append(prob_g)
-        prob = torch.stack(prob).t()
 
-        return prob
+        return torch.stack(prob, dim=-1)
 
     def predict(self, Y, dT, T,  qmu=None, qs=None):
         """
@@ -240,17 +243,22 @@ class GPM(nn.Module):
         delta = log_pi0 + ll[0]
         idx = []
 
+        B, T, K = ll.shape
+        delta = pi0_norm + ll[:, 0]
+        idx = []
+
         # forward
         for t in range(1, T):
-            max_idx = torch.max(delta + log_pi[t - 1].t(), dim=1)
+            max_idx = torch.max(delta.unsqueeze(-1).repeat(1, 1, self.K) + \
+                                log_pi[:, t - 1], dim=1)
             idx.append(max_idx[1])
-            delta = max_idx[0] + ll[t]
-        i = torch.argmax(delta)
+            delta = max_idx[0] + ll[:, t]
+        i = torch.argmax(delta, dim=1)
         Z = [i]
 
         # backward
         for t in range(T - 2, -1, -1):
-            i = idx[t][i]
+            i = torch.gather(idx[t], 1, i.unsqueeze(1)).squeeze(-1)
             Z.append(i)
 
         pi = log_pi.exp()

@@ -63,7 +63,7 @@ class MRP(nn.Module):
                                      A_expand.contiguous(),
                                      ll.contiguous()) + y_loss
 
-        return h, loss
+        return h, loss.mean()
 
     def dT_mixture_prob(self, dT):
         """

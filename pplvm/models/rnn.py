@@ -28,7 +28,8 @@ class RNNInduce(torch.nn.Module):
                                 batch_first=True,
                                 bidirectional=True).double()
 
-        self.fc_weight = nn.Parameter(torch.randn(size=(hidden_size * 2, out_size * 2),
+        self.fc_weight = nn.Parameter(torch.randn(size=(hidden_size * 2,
+                                                        out_size * 2),
                                                   dtype=torch.float64,
                                                   requires_grad=True))
 
@@ -44,11 +45,11 @@ class RNNInduce(torch.nn.Module):
 
         """
 
-        x = torch.cat((Y, dT.unsqueeze(1)), dim=1).unsqueeze(0)
-        out = self.rnn(x)[0].squeeze()
-        out = torch.mm(out, self.fc_weight)
+        x = torch.cat((Y, dT.unsqueeze(2)), dim=2)
+        out = self.rnn(x)[0]
+        out = torch.bmm(out, self.fc_weight.repeat(len(out), 1, 1))
 
-        return out[induce_idx, :self.out_size].view(len(induce_idx),
+        return out[:,induce_idx, :self.out_size].view(len(Y), len(induce_idx),
                                                          self.out_size),\
-               out[induce_idx, self.out_size:].view(len(induce_idx),
+               out[:,induce_idx, self.out_size:].view(len(Y), len(induce_idx),
                                                          self.out_size)

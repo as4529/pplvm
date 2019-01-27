@@ -68,25 +68,25 @@ class MixtureVAE(nn.Module):
         return Normal(*self.decoder(h))
 
 
-class MixturePrior(nn.Module):
+class MixtureGaussian(nn.Module):
 
     """
     Mixture of Gaussians prior
     """
 
-    def __init__(self, K, D_h, means=None, variances=None):
+    def __init__(self, K, D, means=None, variances=None):
         """
 
         Args:
             K (int): number of discrete states
-            D_h (int): dimensionality of data
+            D (int): dimensionality of data
             means (torch.tensor): initial means
             variances (torch.tensor): initial variances
         """
-        super(MixturePrior, self).__init__()
+        super(MixtureGaussian, self).__init__()
 
         self.K = K
-        self.D = D_h
+        self.D = D
         if means is None:
             self.prior_mus = nn.Parameter(
                 torch.tensor(torch.randn(self.K, self.D) * 1e-2,
