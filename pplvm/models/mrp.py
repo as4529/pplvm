@@ -39,8 +39,8 @@ class MRP(nn.Module):
         Given observed data and intervals, returns embeddings (if using VAE observation)
         loss
         Args:
-            Y ():
-            dT ():
+            Y (torch.tensor): n_batches by n_timesteps by dim marks
+            dT (torch.tensor): n_batches by n_timesteps intervals
 
         Returns:
 
@@ -52,7 +52,6 @@ class MRP(nn.Module):
         h, y_ll, y_loss = self.obs_model(Y)
         dT_ll = self.dT_mixture_prob(dT)
         ll = y_ll + dT_ll
-        print(ll.shape)
 
         # normalizing transition and initial probabilities
         A_expand = torch.nn.LogSoftmax(dim=1)(self.A).expand(B,
@@ -62,7 +61,7 @@ class MRP(nn.Module):
 
         loss = - 1. * hmmnorm_cython(pi0_norm.contiguous(),
                                      A_expand.contiguous(),
-                                     ll.contiguous()) #+ y_loss
+                                     ll.contiguous()) + y_loss
 
         return h, loss
 
@@ -95,27 +94,35 @@ class MRP(nn.Module):
             length N list of most likely discrete states (int)
         """
 
+        B, N, D = Y.shape
+
+        # calculating likelihoods per discrete state for Y and intervals
         h, y_ll, y_loss = self.obs_model(Y)
         dT_ll = self.dT_mixture_prob(dT)
         ll = y_ll + dT_ll
-        A_expand = torch.nn.LogSoftmax(dim=1)(self.A).expand(len(dT) - 1,
+
+        # normalizing transition and initial probabilities
+        A_expand = torch.nn.LogSoftmax(dim=1)(self.A).expand(B,
+                                                             N - 1,
                                                              self.K, self.K)
-        pi0_norm = torch.nn.LogSoftmax()(self.prior.pi)
-        T, K = ll.shape
-        delta = pi0_norm + ll[0]
+        pi0_norm = torch.nn.LogSoftmax(dim=0)(self.obs_model.pi).expand(B, self.K)
+
+        B, T, K = ll.shape
+        delta = pi0_norm + ll[:,0]
         idx = []
 
         # forward
         for t in range(1, T):
-            max_idx = torch.max(delta + A_expand[t - 1].t(), dim=1)
+            max_idx = torch.max(delta.unsqueeze(-1).repeat(1, 1, self.K) +\
+                                A_expand[:,t - 1], dim=1)
             idx.append(max_idx[1])
-            delta = max_idx[0] + ll[t]
-        i = torch.argmax(delta)
+            delta = max_idx[0] + ll[:,t]
+        i = torch.argmax(delta, dim=1)
         Z = [i]
 
         # backward
         for t in range(T - 2, -1, -1):
-            i = idx[t][i]
+            i = torch.gather(idx[t], 1, i.unsqueeze(1)).squeeze(-1)
             Z.append(i)
 
-        return list(reversed(Z))
+        return torch.stack(Z, dim=-1)
