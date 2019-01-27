@@ -5,9 +5,23 @@ from .hmm import backward_pass as backward_pass_cython
 import numpy as np
 
 class HMMNormalizerCython(Function):
+    """
+    Accelerated HMM normalizer function
+    """
 
     @staticmethod
     def forward(ctx, log_pi0, log_As, log_likes):
+        """
+        Computes HMM normalizer
+        Args:
+            ctx (): context
+            log_pi0 (torch.tensor): log of initial state probabilities
+            log_As (torch.tensor): log of transition probabilities (N by K by K)
+            log_likes (torch.tensor): log likelihoods (N by K)
+
+        Returns:
+
+        """
         T, K = log_likes.shape
         log_pi0, log_As, log_likes = log_pi0.detach(),\
                                      log_As.detach(),\
@@ -23,6 +37,15 @@ class HMMNormalizerCython(Function):
 
     @staticmethod
     def backward(ctx, grad_output):
+        """
+        Computes gradients of HMM normalizer
+        Args:
+            ctx (): context
+            grad_output (): output of forward pass
+
+        Returns:
+
+        """
         alphas, log_As = ctx.saved_tensors
         alphas, log_As = alphas.detach().numpy(), log_As.detach().numpy()
         T, K = alphas.shape
